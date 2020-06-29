@@ -1,0 +1,103 @@
+{
+  "variables": {
+    "aws_region": null,
+    "ami_name": "armor-eks-{{user `eks_version`}}-worker-{{timestamp}}",
+    "creator": "{{env `USER`}}",
+    "eks_version": "",
+    "vpc_id": "",
+    "source_ami_id": "",
+    "armor_agent_license": ""
+  },
+  "sensitive-variables": ["armor_agent_license"],
+  "builders": [
+    {
+      "type": "amazon-ebs",
+      "region": "{{ user `aws_region` }}",
+      "source_ami": "{{ user `source_ami_id` }}",
+      "source_ami_filter": {
+        "filters": {
+          "virtualization-type": "hvm",
+          "name": "amazon-eks-node-{{ user `eks_version` }}-*",
+          "root-device-type": "ebs"
+        },
+        "owners": [602401143452],
+        "most_recent": true
+      },
+      "spot_instance_types": ["t3.medium", "t3.large", "t3.2xlarge"],
+      "spot_price": "auto",
+      "vpc_id": "{{ user `vpc_id` }}",
+      "associate_public_ip_address": true,
+      "ssh_interface": "public_ip",
+      "launch_block_device_mappings": [
+        {
+          "device_name": "/dev/xvda",
+          "volume_type": "gp2",
+          "volume_size": 20,
+          "delete_on_termination": true
+        }
+      ],
+      "subnet_filter": {
+        "most_free": true
+      },
+      "ssh_username": "ec2-user",
+      "ssh_pty": true,
+      "temporary_key_pair_name": "{{ user `ami_name` }}-{{ user `creator` }}",
+      "run_tags": {
+          "Name": "Packer Build: {{ user `ami_name` }}",
+          "Creator": "{{ user `creator` }}"
+      },
+      "tags": {
+          "type": "armor-eks-ami-{{ user `eks_version` }}",
+          "source_ami_id": "{{ .SourceAMI }}",
+          "source_ami_created_date": "{{ .SourceAMICreationDate }}",
+          "creator": "{{ user `creator` }}",
+          "created": "{{ timestamp }}"
+      },
+      "ami_name": "{{ user `ami_name` }}",
+      "ami_description": "EKS {{ user `eks_version` }} worker node with Armor installed"
+    }
+  ],
+  "provisioners": [
+    {
+      "type": "shell",
+      "inline": [
+        "mkdir -p /tmp/files/",
+        "sudo mkdir -p /opt/xetus/instance-self-test-scripts"
+      ]
+    },
+    {
+      "type": "file",
+      "source": "files/",
+      "destination": "/tmp/files/"
+    },
+    {
+      "type": "shell",
+      "inline": [
+        "sudo mv /tmp/files/check_armor_services.sh /opt/xetus/instance-self-test-scripts/",
+        "sudo chown root:root /opt/xetus/instance-self-test-scripts/*",
+        "sudo chmod a+x /opt/xetus/instance-self-test-scripts/*"
+      ]
+    },
+    {
+      "type": "shell",
+      "scripts": ["files/install_aws_ssm.sh"]
+    },
+    {
+      "type": "shell",
+      "scripts": ["files/install_armor_full.sh"],
+      "environment_vars": ["ARMOR_AGENT_LICENSE={{ user `armor_agent_license` }}"]
+    },
+    {
+      "type": "shell",
+      "scripts": ["files/self_test.sh"],
+      "execute_command": "sudo -S sh -c '{{ .Vars }} {{ .Path }}'"
+    }
+  ],
+  "post-processors": [
+    {
+      "type": "manifest",
+      "output": "manifest.json",
+      "strip_path": true
+    }
+  ]
+}
